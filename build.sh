@@ -35,6 +35,11 @@ fi
 
 echo "==> Building $APP_NAME for arch=$ARCH"
 
+# Tell Spotlight to ignore build artifacts so old .app bundles
+# don't show up in search after every rebuild.
+mkdir -p "$BUILD_DIR" "$DIST_DIR"
+touch "$BUILD_DIR/.metadata_never_index" "$DIST_DIR/.metadata_never_index"
+
 # 1. Build virtualenv
 if [[ ! -d "$VENV_DIR" ]]; then
   echo "==> Creating build venv at $VENV_DIR"

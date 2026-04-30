@@ -1,12 +1,6 @@
-# TomoTexture for macOS (Unofficial Community Port)
+# TomoTexture for macOS
 
-> ## ⚠️ Read this first
->
-> This is an **unofficial community port** of [TomoTexture](https://github.com/AlfonsoMallozzi/TomoTexture).
->
-> [@AlfonsoMallozzi](https://github.com/AlfonsoMallozzi) is releasing an **official macOS build** of his own — see [issue #31 on the upstream repo](https://github.com/AlfonsoMallozzi/TomoTexture/issues/31). **If you can wait, use his official release** when it drops. It will be the canonical Mac build going forward.
->
-> This repo exists for folks who want a working Mac DMG right now. Built using the public permission Alfonso granted in v1.0 to decompile the Windows .exe.
+> The macOS port of [TomoTexture](https://github.com/AlfonsoMallozzi/TomoTexture), maintained with permission from [@AlfonsoMallozzi](https://github.com/AlfonsoMallozzi). May become the official Mac build pending stability — see upstream's [#31](https://github.com/AlfonsoMallozzi/TomoTexture/issues/31).
 
 A native macOS port of [TomoTexture](https://github.com/AlfonsoMallozzi/TomoTexture), the save-canvas editor for **Tomodachi Life**. Edit the textures players paint inside the game — food, goods, face paint, signs, and more — by replacing the canvas images in your Ryujinx save folder.
 
@@ -109,4 +103,4 @@ Supported canvas types: `Food`, `Goods`, `FacePaint`, `Sign`, `Exterior`, `Inter
 
 **Always back up your save folder before editing.** TomoTexture creates `.bak` files automatically when you replace a canvas, but a clean external backup costs nothing.
 
-This is an **unofficial community macOS port**. The official Windows build (and the upcoming official macOS build) live on the [upstream repo](https://github.com/AlfonsoMallozzi/TomoTexture).
+The official Windows build lives on the [upstream repo](https://github.com/AlfonsoMallozzi/TomoTexture). This is the macOS counterpart, maintained with Alfonso's permission.

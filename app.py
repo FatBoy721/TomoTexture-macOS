@@ -6,6 +6,9 @@ import traceback
 import platform
 import webbrowser
 import math
+import threading
+import urllib.request
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -19,10 +22,6 @@ from PIL import Image, ImageTk, ImageDraw
 
 import swizzle
 import ugctex
-
-# ---------------------------------------------------------------------------
-# Backend constants & config
-# ---------------------------------------------------------------------------
 
 KNOWN_CANVAS_TYPES = (
     'Food',
@@ -50,6 +49,29 @@ THUMB_SIZE = 120
 PREVIEW_SIZE = 360
 BACKUP_DIRNAME = '_ugc-tool-backups'
 
+APP_VERSION = "1.0.1"
+GITHUB_REPO = "FatBoy721/TomoTexture-macOS"
+
+
+def _fetch_latest_release():
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={"User-Agent": "TomoTexture"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+        tag = data.get("tag_name", "").lstrip("v")
+        html_url = data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases/latest")
+        return tag, html_url
+    except Exception:
+        return None, None
+
+
+def _version_tuple(v: str):
+    try:
+        return tuple(int(x) for x in v.split("."))
+    except Exception:
+        return (0,)
+
 _IS_MAC = platform.system() == 'Darwin'
 _IS_LINUX = platform.system() == 'Linux'
 
@@ -67,9 +89,6 @@ def resource_path(name: str) -> Path:
     return base / name
 
 
-# ---------------------------------------------------------------------------
-# Color palette
-# ---------------------------------------------------------------------------
 
 BG = ("#f5f7fb", "#0b0b10")
 SURF = ("#ffffff", "#14141f")
@@ -91,10 +110,6 @@ def theme_color(color):
     if isinstance(color, tuple):
         return color[1] if ctk.get_appearance_mode() == "Dark" else color[0]
     return color
-
-# ---------------------------------------------------------------------------
-# Image helpers
-# ---------------------------------------------------------------------------
 
 
 def load_image_rgba(path, target_w: int = 256, target_h: int = 256,
@@ -127,14 +142,38 @@ def load_image_rgba(path, target_w: int = 256, target_h: int = 256,
         img = padded
 
     arr = np.array(img, dtype=np.uint8)
-    mask = arr[..., 3] == 0
-    if mask.any():
-        arr[mask] = (0, 0, 0, 0)
+    arr[arr[..., 3] < 20, 3] = 0
+    arr[arr[..., 3] > 0, 3] = 255
+    arr[arr[..., 3] == 0] = 0
+    return Image.fromarray(arr, mode='RGBA')
+
+
+def srgb_to_linear_image(img: Image.Image) -> Image.Image:
+    arr = np.array(img.convert('RGBA'), dtype=np.uint8)
+    rgb = arr[..., :3].astype(np.float32) / 255.0
+    linear = np.where(
+        rgb <= 0.04045,
+        rgb / 12.92,
+        ((rgb + 0.055) / 1.055) ** 2.4,
+    )
+    arr[..., :3] = np.clip(np.rint(linear * 255.0), 0, 255).astype(np.uint8)
+    return Image.fromarray(arr, mode='RGBA')
+
+
+def linear_to_srgb_image(img: Image.Image) -> Image.Image:
+    arr = np.array(img.convert('RGBA'), dtype=np.uint8)
+    rgb = arr[..., :3].astype(np.float32) / 255.0
+    srgb = np.where(
+        rgb <= 0.0031308,
+        rgb * 12.92,
+        1.055 * (rgb ** (1.0 / 2.4)) - 0.055,
+    )
+    arr[..., :3] = np.clip(np.rint(srgb * 255.0), 0, 255).astype(np.uint8)
     return Image.fromarray(arr, mode='RGBA')
 
 
 def image_to_canvas_bytes(img: Image.Image) -> bytes:
-    linear = img.tobytes()
+    linear = srgb_to_linear_image(img).tobytes()
     swizzled = swizzle.swizzle(linear)
     return zstd.ZstdCompressor(level=19).compress(swizzled)
 
@@ -142,7 +181,8 @@ def image_to_canvas_bytes(img: Image.Image) -> bytes:
 def canvas_file_to_image(path: Path) -> Image.Image:
     raw = zstd.ZstdDecompressor().decompress(path.read_bytes())
     linear = swizzle.deswizzle(raw)
-    return Image.frombytes('RGBA', (swizzle.CANVAS_W, swizzle.CANVAS_H), linear)
+    img = Image.frombytes('RGBA', (swizzle.CANVAS_W, swizzle.CANVAS_H), linear)
+    return linear_to_srgb_image(img)
 
 
 def make_checker_bg(size: int, sq: int = 8,
@@ -166,10 +206,6 @@ def composite_on_checker(img: Image.Image, size: int) -> Image.Image:
     result.alpha_composite(scaled, dest=(ox, oy))
     return result
 
-
-# ---------------------------------------------------------------------------
-# CanvasEntry & scanner
-# ---------------------------------------------------------------------------
 
 
 class CanvasEntry:
@@ -268,9 +304,6 @@ def find_canvases(save_root: Path, max_depth: int = 8) -> tuple[list[CanvasEntry
     return result, sorted(all_slots)
 
 
-# ---------------------------------------------------------------------------
-# CTk helpers
-# ---------------------------------------------------------------------------
 
 def _lbl(parent, text, size=12, weight="normal", color=FG, **kw) -> ctk.CTkLabel:
     return ctk.CTkLabel(parent, text=text, text_color=color,
@@ -281,10 +314,6 @@ def _card(parent, **kw) -> ctk.CTkFrame:
     return ctk.CTkFrame(parent, fg_color=SURF, corner_radius=14,
                         border_width=1, border_color=BORDER, **kw)
 
-
-# ---------------------------------------------------------------------------
-# Dialogs
-# ---------------------------------------------------------------------------
 
 
 class ItemTypeDialog(ctk.CTkToplevel):
@@ -512,10 +541,6 @@ class PreviewDialog(ctk.CTkToplevel):
         self.bind('<Escape>', lambda e: self.destroy())
 
 
-# ---------------------------------------------------------------------------
-# Main App
-# ---------------------------------------------------------------------------
-
 
 class App(ctk.CTk):
 
@@ -551,10 +576,11 @@ class App(ctk.CTk):
         if initial_root:
             self.after(50, self._refresh)
 
+        self.after(2000, self._start_update_check)
+
     def _selected_slots(self) -> set[str]:
         return {s for s, v in self._slot_vars.items() if v.get()}
 
-    # ── build UI ──────────────────────────────────────────────────────────
 
     def _build(self):
         self._build_header()
@@ -584,6 +610,71 @@ class App(ctk.CTk):
             button_color=ACCENT, button_hover_color=ACCENT_H,
         )
         self._mode_switch.pack(side="right", padx=18)
+
+        self._check_update_btn = ctk.CTkButton(
+            hdr, text="Check for Updates", width=130, height=28,
+            fg_color=SURF2, hover_color=BORDER, text_color=MUTED2,
+            font=ctk.CTkFont(size=11), corner_radius=6,
+            command=self._manual_update_check,
+        )
+        self._check_update_btn.pack(side="right", padx=(0, 6))
+
+        # Hidden — appears only when an update is found
+        self._update_btn = ctk.CTkButton(
+            hdr, text="", width=0,
+            fg_color=SUCCESS, hover_color=("#047857", "#059669"),
+            text_color=("#ffffff", "#ffffff"),
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6, height=28,
+            command=self._open_release_url,
+        )
+        self._update_url = ""
+
+    def _start_update_check(self):
+        def _worker():
+            tag, url = _fetch_latest_release()
+            if tag and _version_tuple(tag) > _version_tuple(APP_VERSION):
+                self.after(0, lambda: self._show_update_banner(tag, url))
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _manual_update_check(self):
+        self._check_update_btn.configure(text="Checking…", state="disabled")
+        self._set_status("Checking for updates…", ACCENT)
+
+        def _worker():
+            tag, url = _fetch_latest_release()
+            def _done():
+                if tag is None:
+                    self._flash_check_btn("Connection failed", WARN)
+                    self._set_status("Update check failed — check your connection.", WARN)
+                elif _version_tuple(tag) > _version_tuple(APP_VERSION):
+                    self._check_update_btn.configure(text="Check for Updates", state="normal")
+                    self._show_update_banner(tag, url)
+                    if messagebox.askyesno(
+                        "Update Available",
+                        f"v{tag} is available (you have v{APP_VERSION}).\nOpen the download page?",
+                    ):
+                        webbrowser.open(url)
+                else:
+                    self._flash_check_btn("✓ You're up to date", SUCCESS)
+                    self._set_status(f"You're up to date — v{APP_VERSION}", SUCCESS)
+            self.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _flash_check_btn(self, msg: str, color):
+        self._check_update_btn.configure(text=msg, text_color=color, state="disabled")
+        self.after(3000, lambda: self._check_update_btn.configure(
+            text="Check for Updates", text_color=MUTED2, state="normal"))
+
+    def _show_update_banner(self, tag: str, url: str):
+        self._update_url = url
+        self._update_btn.configure(text=f"  Update available: v{tag}  ")
+        self._update_btn.pack(side="right", padx=(0, 8))
+
+    def _open_release_url(self):
+        if self._update_url:
+            webbrowser.open(self._update_url)
 
     def _toggle_theme(self):
         if self._theme_animating:
@@ -804,7 +895,6 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=11), anchor="w").pack(side="left", fill="x", expand=True)
         _lbl(bar, "TomoTexture", size=9, color=MUTED).pack(side="right")
 
-    # ── folder / refresh ──────────────────────────────────────────────────
 
     def _browse_folder(self):
         initial = self._save_root_var.get() or os.path.expanduser('~')
@@ -910,7 +1000,6 @@ class App(ctk.CTk):
             result.extend(App._all_widgets(child))
         return result
 
-    # ── item selection ────────────────────────────────────────────────────
 
     def _on_item_selected(self, entry: CanvasEntry, row=None):
         for r in self._item_rows.values():
@@ -988,7 +1077,6 @@ class App(ctk.CTk):
         self._btn_revert.configure(state="disabled")
         self._btn_clear.configure(state="disabled")
 
-    # ── slots ─────────────────────────────────────────────────────────────
 
     def _rebuild_slots(self, slots: list[str]):
         for w in self._slot_widgets:
@@ -1011,7 +1099,6 @@ class App(ctk.CTk):
             cb.pack(side="left", padx=(10, 0))
             self._slot_widgets.append(cb)
 
-    # ── actions ───────────────────────────────────────────────────────────
 
     def _on_replace(self):
         entry = self._selected
@@ -1159,11 +1246,7 @@ class App(ctk.CTk):
             thumb = composite_on_checker(img, 48)
             ctk_img = ctk.CTkImage(light_image=thumb, dark_image=thumb, size=(48, 48))
             self._img_refs.append(ctk_img)
-            thumb_holder = row.winfo_children()[0]
-            for w in thumb_holder.winfo_children():
-                w.destroy()
-            ctk.CTkLabel(thumb_holder, image=ctk_img, text="").place(
-                relx=0.5, rely=0.5, anchor="center")
+            row.configure(image=ctk_img)
         except Exception:
             pass
 
@@ -1175,7 +1258,6 @@ class App(ctk.CTk):
             return
         PreviewDialog(self, entry, img)
 
-    # ── status bar ────────────────────────────────────────────────────────
 
     def _set_status(self, msg: str, color=MUTED2):
         self._status_var.set(msg)

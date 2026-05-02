@@ -37,8 +37,8 @@ echo "==> Building $APP_NAME for arch=$ARCH"
 
 # Tell Spotlight to ignore build artifacts so old .app bundles
 # don't show up in search after every rebuild.
-mkdir -p "$BUILD_DIR" "$DIST_DIR"
-touch "$BUILD_DIR/.metadata_never_index" "$DIST_DIR/.metadata_never_index"
+mkdir -p "$BUILD_DIR" "$DIST_DIR" "$DMG_STAGING"
+touch "$BUILD_DIR/.metadata_never_index" "$DIST_DIR/.metadata_never_index" "$DMG_STAGING/.metadata_never_index"
 
 # 1. Build virtualenv
 if [[ ! -d "$VENV_DIR" ]]; then
@@ -89,6 +89,7 @@ PYI_CMD=(pyinstaller
   --osx-bundle-identifier "com.tomotexture.app"
   --add-data "${ICON_PNG}:."
   --hidden-import "PIL._tkinter_finder"
+  --collect-all "PIL"
 )
 
 case "$ARCH" in
